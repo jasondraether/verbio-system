@@ -1,13 +1,12 @@
 # From: https://github.com/HectorCarral/Empatica-E4-LSL
 import socket
-import pylsl
 
 class E4Client(object):
     def __init__(self):
         self.address = '127.0.0.1'
         self.port = 28000
         self.buffer_size = 4096
-        self.device_id = '' # TODO: Fill in
+        self.device_id = '1930CD' # TODO: Fill in
         self.timeout = 3
 
         self.reset()
@@ -17,18 +16,10 @@ class E4Client(object):
         self.ts_start = {
             'E4_Bvp': None,
             'E4_Gsr': None,
-            'E4_Hr': None
         }
 
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.settimeout(self.timeout)
-
-        info_bvp = pylsl.StreamInfo('bvp', 'BVP', 1, 64, 'float32', 'BVP-empatica_e4')
-        self.outlet_bvp = pylsl.StreamOutlet(info_bvp)
-        info_gsr = pylsl.StreamInfo('gsr', 'GSR', 1, 4, 'float32', 'GSR-empatica_e4')
-        self.outlet_gsr = pylsl.StreamOutlet(info_gsr)
-        info_hr = pylsl.StreamInfo('hr', 'HR', 1, 1, 'float32', 'HR-empatica_e4')
-        self.outlet_hr = pylsl.StreamOutlet(info_hr)
 
     def connect(self):
         """
@@ -89,15 +80,12 @@ class E4Client(object):
         response = self.s.recv(self.buffer_size)
         print(f'Got response: {response.decode("utf-8")}')
 
-        print("Suscribing to HR...")
-        self.s.send(("device_subscribe " + 'hr' + " ON\r\n").encode())
-        response = self.s.recv(self.buffer_size)
-        print(f'Got response: {response.decode("utf-8")}')
-
     def reconnect(self):
         print("Reconnecting...")
         self.reset()
         self.connect()
+        self.get_device_list()
+        self.connect_device()
         self.subscribe()
         self.resume_stream()
         print("Reconnected.")
@@ -111,9 +99,13 @@ class E4Client(object):
     def get_message(self):
         return self.s.recv(self.buffer_size).decode("utf-8")
 
+    def validate_sample(self, sample):
+        if sample == '': return False
+        if sample[0] == 'R': return False
+        return True
+
     def parse_sample(self, sample):
         stream_type = sample.split()[0]
         timestamp = float(sample.split()[1].replace(',', '.'))
         data = float(sample.split()[2].replace(',', '.'))
         return stream_type, timestamp, data
-

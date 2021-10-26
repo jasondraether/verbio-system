@@ -1,28 +1,10 @@
 from client import E4Client
-import verbio as vb
 import socket
 from collections import defaultdict, deque
 import pickle
 
-def intervene():
-    pass
-
-def get_model(model_path):
-    clf = pickle.load(model_path)
-    return clf
-
-def get_prediction(clf, eda_frame, hr_frame, bvp_frame):
-    eda_df = vb.features.eda_features_sample(eda_frame, 4)
-    hr_grad = vb.features.gradient(hr_frame)
-
-    x = [eda_df, hr_grad]
-
-    pred = clf.predict()
-
 
 if __name__ == '__main__':
-
-    clf = get_model('path/to/model.pkl')
 
     win_len = 10.0
     win_stride = 5.0
@@ -36,6 +18,7 @@ if __name__ == '__main__':
 
     try:
         print("Running E4 client...")
+        e4_client.reconnect()
         while True:
             try:
                 response = e4_client.get_message()
@@ -46,6 +29,7 @@ if __name__ == '__main__':
                 else:
                     samples = response.split("\n")
                     for sample in samples:
+                        if not e4_client.validate_sample(sample): continue
                         stream_type, timestamp, data = e4_client.parse_sample(sample)
                         timestamp_base = ts_start.get(stream_type, None)
                         if timestamp_base == None:
@@ -66,15 +50,19 @@ if __name__ == '__main__':
                         eda_frame = data_buffer['E4_Gsr']
                         bvp_frame = data_buffer['E4_Bvp']
 
-                        prediction = get_prediction(clf, eda_frame, hr_frame, bvp_frame)
-                        if prediction == 1:
-                            intervene()
+                        print(eda_frame)
+                        print(bvp_frame)
+
+                        ts_start = {x: ts_start[x]+win_stride for x in streams}
+                        data_buffer = overflow_buffer
+                        overflow_buffer = {x: deque() for x in streams}
+                        filled = {x: False for x in streams}
+
 
 
 
             except socket.timeout:
-                print("Socket timeout. Attempting to reconnect...")
-                e4_client.reconnect()
+                print("Socket timeout. Aborting.")
                 break
     except KeyboardInterrupt:
         print(f'Got keyboard interrupt.')
