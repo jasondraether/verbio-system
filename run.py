@@ -1,81 +1,120 @@
 from client import E4Client
-import verbio as vb
 import socket
-from collections import defaultdict, deque
 import pickle
+
+SS_IP = '127.0.0.1'
+SS_PORT = 28000
+DEVICE_IDS = ['1930CD']
+WIN_LEN = 10.0
+WIN_STRIDE = 5.0
+STREAMS = ['E4_Gsr', 'E4_Bvp'] # SUBS ~ STREAMS
+SUBS = ['gsr', 'bvp']
+DISCONNECT_MESSAGE = "connection lost to device"
 
 def intervene():
     pass
 
-def get_model(model_path):
-    clf = pickle.load(model_path)
-    return clf
+def get_prediction(eda_features, bvp_features):
+    pass
 
-def get_prediction(clf, eda_frame, hr_frame, bvp_frame):
-    eda_df = vb.features.eda_features_sample(eda_frame, 4)
-    hr_grad = vb.features.gradient(hr_frame)
+def process_eda(eda_frame):
+    pass
 
-    x = [eda_df, hr_grad]
-
-    pred = clf.predict()
-
+def process_bvp(bvp_frame):
+    pass
 
 if __name__ == '__main__':
 
-    clf = get_model('path/to/model.pkl')
+    # Grab parameters
+    win_len = WIN_LEN
+    win_stride = WIN_STRIDE
+    streams = STREAMS
 
-    win_len = 10.0
-    win_stride = 5.0
+    # Initialize client
+    e4_client = E4Client(
+        SS_IP,
+        SS_PORT,
+        DEVICE_IDS,
+        SUBS
+    )
 
-    e4_client = E4Client()
-    streams = ['E4_Gsr', 'E4_Bvp']
-    ts_start = {x: None for x in streams}
-    filled = {x: False for x in streams}
-    data_buffer = {x: deque() for x in streams}
-    overflow_buffer = {x: deque() for x in streams}
+    # Initialize buffers and meta
+    start_timestamps = {x: None for x in streams}
+    filled           = {x: False for x in streams}
+    buffer           = {x: [] for x in streams}
+    overflow_buffer  = {x: [] for x in streams}
 
     try:
         print("Running E4 client...")
+        e4_client.run()
         while True:
             try:
                 response = e4_client.get_message()
-                if "connection lost to device" in response:
+                if DISCONNECT_MESSAGE in response:
                     print('Lost connection to device. Attempting to reconnect...')
-                    print(response.decode("utf-8"))
                     e4_client.reconnect()
                 else:
-                    samples = response.split("\n")
-                    for sample in samples:
-                        stream_type, timestamp, data = e4_client.parse_sample(sample)
-                        timestamp_base = ts_start.get(stream_type, None)
+                    packets = response.split("\n")
+                    for packet in packets:
+                        # Check if this is a data packet
+                        if not e4_client.validate_packet(packet): continue
+                        # Sample is valid, parse it
+                        stream, timestamp, data = e4_client.parse_sample(packet)
+                        # If we don't care about the sample, toss it
+                        if stream not in streams: continue
+                        # Get the base timestamp for this window
+                        timestamp_base = start_timestamps.get(stream, None)
+                        # If it doesn't exist, set it as this one (TODO: Change this based on event)
                         if timestamp_base == None:
-                            ts_start[stream_type] = timestamp
+                            start_timestamps[stream] = timestamp
+                            timestamp_base = timestamp
+
+                        # Already overflowed...
+                        if filled[stream]:
+                            overflow_buffer[stream].append((data, timestamp))
                         else:
-                            # Already overflowed...
-                            if filled[stream_type]:
-                                overflow_buffer[stream_type].append(data)
+                            # Check if we've filled up this window. If so, mark it and overflow
+                            if timestamp - timestamp_base > win_len:
+                                filled[stream] = True
+                                overflow_buffer[stream].append((data, timestamp))
+                            # Add to normal buffer
                             else:
-                                # Check if we've filled up this window. If so, mark it and overflow
-                                if timestamp - timestamp_base > win_len:
-                                    filled[stream_type] = True
-                                    overflow_buffer[stream_type].append(data)
-                                # Add to normal buffer
-                                else:
-                                    data_buffer[stream_type].append(data)
-                    if all(filled[x] for x in streams):
+                                buffer[stream].append((data, timestamp))
+
+                    # If any AREN'T filled, skip (doing it this way to make it faster)
+                    if not any(not(filled[stream]) for stream in streams):
+                        # Grab frame
                         eda_frame = data_buffer['E4_Gsr']
                         bvp_frame = data_buffer['E4_Bvp']
 
-                        prediction = get_prediction(clf, eda_frame, hr_frame, bvp_frame)
-                        if prediction == 1:
-                            intervene()
+                        # Process frame
+                        eda_features = process_eda(eda_frame)
+                        bvp_features = process_bvp(bvp_frame)
 
+                        # Predict
+                        prediction = get_prediction(eda_features, bvp_features)
 
+                        # Intervene
+                        if prediction == 1: intervene()
+
+                        # Update timestamps
+                        start_timestamps = {stream: start_timestamps[stream]+win_stride for stream in streams}
+
+                        # Update data buffer
+                        for stream in streams:
+                             buffer[stream] = [(d, ts) for d, ts in buffer[stream] + overflow_buffer[stream] \
+                                              if ts >= start_timestamps[stream] and ts <= start_timestamps[stream]+win_len]
+
+                        # Clear overflow buffer
+                        overflow_buffer = {stream: [] for stream in streams}
+
+                        # Clear filled map
+                        filled = {stream: False for stream in streams}
 
             except socket.timeout:
                 print("Socket timeout. Attempting to reconnect...")
                 e4_client.reconnect()
-                break
+
     except KeyboardInterrupt:
         print(f'Got keyboard interrupt.')
         e4_client.disconnect()
