@@ -1,4 +1,4 @@
-# From: https://github.com/HectorCarral/Empatica-E4-LSL
+# Inspired by: https://github.com/HectorCarral/Empatica-E4-LSL
 import socket
 
 class E4Client(object):
@@ -8,6 +8,8 @@ class E4Client(object):
         """
         self.address = address
         self.port = port
+
+        # User can pass string or list for device_ids and signal_types
         if isinstance(device_ids, str):
             self.device_ids = [device_ids]
         else:
@@ -18,6 +20,8 @@ class E4Client(object):
         else:
             self.signal_types = signal_types
 
+        # Buffer of 4096 bytes and timeout of 10 seconds
+        # Socket will throw timeout error if no response after 10 seconds!
         self.buffer_size = 4096
         self.timeout = 10
 
@@ -123,6 +127,9 @@ class E4Client(object):
     def get_message(self):
         return self.s.recv(self.buffer_size).decode("utf-8")
 
+    def get_packets(self, response):
+        return response.split("\n")
+
     def validate_packet(self, packet):
         if packet == '': return False
         if packet[0] == 'R': return False
@@ -133,3 +140,16 @@ class E4Client(object):
         timestamp = float(packet.split()[1].replace(',', '.'))
         data = float(packet.split()[2].replace(',', '.'))
         return stream, timestamp, data
+
+    def poll_for_tag(self):
+        try:
+            print("Polling for tag...")
+            while True:
+                response = self.get_message()
+                packets = self.get_packets(response)
+                for i, packet in enumerate(packets):
+                    if "E4_Tag" in packet:
+                        print("Found tag!")
+                        return float(packet.split()[1].replace(',','.')), packets[i+1:]
+        except socket.timeout:
+            print("Timed out waiting for tag. Resuming polling...")
